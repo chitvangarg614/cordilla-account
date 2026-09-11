@@ -3,7 +3,7 @@ import joblib
 import shap
 
 from .tools import get_account_history
-
+from .external_context import build_external_context
 
 class AccountPrioritizationAgent:
 
@@ -135,6 +135,118 @@ class AccountPrioritizationAgent:
 
         return context
 
+    def get_external_context(self, account: pd.Series) -> dict:
+        """Get external company context for an account."""
+        return build_external_context(account["account_id"])
+
+
+    def decide_action(
+        self,
+        account: pd.Series,
+        history: dict,
+        explanation: list[dict],
+        external_context: dict,
+    ) -> dict:
+        """Use an LLM to decide the next sales action."""
+
+        system_prompt = """
+    You are an AI sales prioritization agent.
+
+    Your job is to help a sales representative decide the next best action
+    for a high-priority account.
+
+    The account has already been ranked highly by a machine-learning model.
+    The model score represents the estimated probability that the account
+    will convert within 90 days. It is a prioritization signal, not a guarantee.
+
+    You will receive:
+    - account information
+    - model conversion probability
+    - model explanation
+    - CRM/account history
+    - external company context
+
+    Your responsibility is to synthesize these signals and recommend the
+    most appropriate next action for the sales representative.
+
+    Allowed actions:
+
+    CONTACT_NOW
+    - The account has enough evidence to justify immediate outreach.
+
+    REENGAGE
+    - The account is a former customer and the available signals suggest
+    that re-engagement is appropriate.
+
+    RESEARCH_FIRST
+    - The account is high priority, but there is not enough reliable context
+    to confidently recommend immediate outreach or re-engagement.
+
+    Decision guidelines:
+
+    - Consider all available signals together.
+    - Do not rely on the model score alone.
+    - Use the model explanation to understand which features contributed to
+    the prediction. Do not interpret model explanations as causal effects.
+    - Use CRM history to understand previous interactions, opportunities,
+    contact outcomes, and customer history.
+    - Use external context to understand what is happening at the company.
+    - Do not invent information that is not provided.
+    - Treat missing or None values as unknown.
+    - Missing information does not automatically require RESEARCH_FIRST.
+    - For former customers, consider REENGAGE when there are meaningful
+    current signals; otherwise choose RESEARCH_FIRST.
+    - For engaged prospects/accounts with strong evidence, prefer CONTACT_NOW.
+    - If the available evidence conflicts substantially or is too weak,
+    choose RESEARCH_FIRST.
+
+    The recommendation should be actionable for a sales representative.
+
+    Return ONLY valid JSON:
+
+    {
+        "action": "CONTACT_NOW | REENGAGE | RESEARCH_FIRST",
+        "reason": "Brief explanation grounded in the provided evidence."
+    }
+    """
+
+        user_prompt = {
+            "account": {
+                "account_id": account["account_id"],
+                "account_type": account["account_type"],
+                "conversion_probability": float(
+                    account["conversion_probability"]
+                ),
+            },
+            "model_explanation": explanation,
+            "crm_history": history,
+            "external_context": external_context,
+        }
+
+        # Mock LLM response for the take-home.
+        # Replace this with the actual LLM call later.
+        #
+        # Recommended production parameters:
+        # temperature=0.0 for deterministic decisions
+        # max_tokens=300 to keep the response concise
+        # response_format=json_object for structured output
+        mock_response = {
+            "action": "CONTACT_NOW",
+            "reason": (
+                "The account has a high predicted conversion probability, "
+                "recent positive CRM engagement, and external signals that "
+                "indicate potential business activity."
+            ),
+        }
+
+        return mock_response
+
+
+
+ 
+
+
+    
     def run(self, accounts: pd.DataFrame) -> pd.DataFrame:
         """Run the complete prioritization flow."""
 

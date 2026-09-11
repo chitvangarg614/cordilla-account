@@ -1,45 +1,36 @@
 import pandas as pd
 
-from agent import AccountPrioritizationAgent
+from agent.agent import AccountPrioritizationAgent
 
 
-def main():
+agent = AccountPrioritizationAgent("model/model.pkl")
 
-    accounts = pd.read_csv("data/accounts_to_score.csv")
+accounts = pd.read_csv("data/accounts_to_score.csv")
 
-    agent = AccountPrioritizationAgent(
-        model_path="model/model.pkl"
+# Score and prioritize
+results = agent.run(accounts)
+
+high_priority = results[
+    results["priority"] == "HIGH"
+]
+
+print(f"Total accounts: {len(accounts)}")
+print(f"High-priority accounts: {len(high_priority)}")
+
+# Run agent for high-priority accounts
+for _, account in high_priority.head(5).iterrows():
+
+    explanation = agent.explain_score(account)
+    history = agent.get_history(account)
+    external_context = agent.get_external_context(account)
+
+    decision = agent.decide_action(
+        account,
+        history,
+        explanation,
+        external_context,
     )
 
-    results = agent.run(accounts)
-
-    results = results.sort_values(
-        "conversion_probability",
-        ascending=False
-    )
-
-    print("\nTop 20 accounts:\n")
-
-    print(
-        results[
-            [
-                "account_id",
-                "account_type",
-                "conversion_probability",
-                "rank",
-                "priority",
-            ]
-        ].head(20).to_string(index=False)
-    )
-
-    # Save complete ranked output
-    results.to_csv(
-        "data/prioritized_accounts.csv",
-        index=False
-    )
-
-    print("\nSaved: agent/prioritized_accounts.csv")
-
-
-if __name__ == "__main__":
-    main()
+    print("\nAccount:", account["account_id"])
+    print("Score:", round(account["conversion_probability"], 4))
+    print("Decision:", decision)
