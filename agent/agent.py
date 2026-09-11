@@ -5,16 +5,23 @@ import shap
 from .tools import get_account_history
 from .external_context import build_external_context
 
+
 class AccountPrioritizationAgent:
 
     def __init__(self, model_path: str):
         self.model = joblib.load(model_path)
 
+        # Tools available to the agent.
+        # The agent decides which tool(s) to use.
+        self.tools = {
+            "crm_history": self.get_history,
+            "external_context": self.get_external_context,
+        }
+
     def get_scores(self, accounts: pd.DataFrame) -> pd.DataFrame:
         """Score all accounts using the provided model."""
 
         feature_cols = self.model.named_steps["pre"].feature_names_in_
-
         X = accounts[feature_cols]
 
         probabilities = self.model.predict_proba(X)
@@ -37,23 +44,20 @@ class AccountPrioritizationAgent:
         preprocessor = self.model.named_steps["pre"]
         classifier = self.model.named_steps["clf"]
 
-        # Select the model's expected input features
         feature_cols = preprocessor.feature_names_in_
 
         X = pd.DataFrame([account])
         X = X[feature_cols]
 
-        # Apply the same preprocessing used by the trained model
+        # Apply the same preprocessing used by the trained model.
         X_transformed = preprocessor.transform(X)
 
-        # Explain the fitted GradientBoostingClassifier
+        # Explain the fitted GradientBoostingClassifier.
         explainer = shap.TreeExplainer(classifier)
         shap_values = explainer.shap_values(X_transformed)
 
-        # Get feature names after preprocessing
         feature_names = preprocessor.get_feature_names_out()
 
-        # SHAP values for this account
         values = shap_values[0]
 
         explanations = pd.DataFrame({
@@ -62,7 +66,6 @@ class AccountPrioritizationAgent:
             "abs_shap_value": abs(values),
         })
 
-        # Select the top contributors by absolute SHAP value
         explanations = (
             explanations
             .sort_values("abs_shap_value", ascending=False)
@@ -89,7 +92,7 @@ class AccountPrioritizationAgent:
 
         result = accounts.copy()
 
-        # Highest probability gets rank 1
+        # Highest probability gets rank 1.
         result["rank"] = (
             result["conversion_probability"]
             .rank(
@@ -99,7 +102,7 @@ class AccountPrioritizationAgent:
             .astype(int)
         )
 
-        # Top 20% become the high-touch SDR queue
+        # Top 20% become the high-priority sales queue.
         threshold = result["conversion_probability"].quantile(0.80)
 
         result["priority"] = result["conversion_probability"].apply(
@@ -112,140 +115,357 @@ class AccountPrioritizationAgent:
 
         return result
 
+    # AGENT TOOLS
+  
+
     def get_history(self, account: pd.Series) -> dict:
         """Get CRM history for an account."""
+
         return get_account_history(account["account_id"])
-
-    def get_high_priority_context(self, accounts: pd.DataFrame) -> list[dict]:
-        """Get explanations and CRM history only for high-priority accounts."""
-
-        results = self.run(accounts)
-
-        high_priority = results[results["priority"] == "HIGH"]
-
-        context = []
-
-        for _, account in high_priority.iterrows():
-            context.append({
-                "account_id": account["account_id"],
-                "score": account["conversion_probability"],
-                "explanation": self.explain_score(account),
-                "history": self.get_history(account),
-            })
-
-        return context
 
     def get_external_context(self, account: pd.Series) -> dict:
         """Get external company context for an account."""
+
         return build_external_context(account["account_id"])
+
+    # AGENT DECISION LOOP
 
 
     def decide_action(
         self,
         account: pd.Series,
-        history: dict,
         explanation: list[dict],
-        external_context: dict,
     ) -> dict:
-        """Use an LLM to decide the next sales action."""
+        """
+        Agentic decision loop.
+
+        The agent starts with the account and model explanation.
+        It decides which context tool it needs, evaluates the result,
+        and can request another tool before making the final action.
+        """
 
         system_prompt = """
-    You are an AI sales prioritization agent.
+You are an AI sales prioritization agent.
 
-    Your job is to help a sales representative decide the next best action
-    for a high-priority account.
+Your job is to help a sales representative decide the next best
+action for a high-priority account.
 
-    The account has already been ranked highly by a machine-learning model.
-    The model score represents the estimated probability that the account
-    will convert within 90 days. It is a prioritization signal, not a guarantee.
+The account has already been ranked highly by a machine-learning model.
 
-    You will receive:
-    - account information
-    - model conversion probability
-    - model explanation
-    - CRM/account history
-    - external company context
+The model score represents the estimated probability that the account
+will convert within 90 days. It is a prioritization signal, not a guarantee.
 
-    Your responsibility is to synthesize these signals and recommend the
-    most appropriate next action for the sales representative.
+You have access to two information tools:
 
-    Allowed actions:
+1. crm_history
+   Use this when you need information about:
+   - previous customer relationship
+   - previous sales interactions
+   - last contact
+   - contact outcome
+   - open opportunities
 
-    CONTACT_NOW
-    - The account has enough evidence to justify immediate outreach.
+2. external_context
+   Use this when you need information about:
+   - recent company activity
+   - company news
+   - hiring
+   - business expansion
+   - other current company signals
 
-    REENGAGE
-    - The account is a former customer and the available signals suggest
-    that re-engagement is appropriate.
+You decide which tool is useful based on the information already available.
 
-    RESEARCH_FIRST
-    - The account is high priority, but there is not enough reliable context
-    to confidently recommend immediate outreach or re-engagement.
+You may:
+- call one tool
+- call both tools if the first result is insufficient
+- stop without calling another tool if you already have enough information
 
-    Decision guidelines:
+Allowed final actions:
 
-    - Consider all available signals together.
-    - Do not rely on the model score alone.
-    - Use the model explanation to understand which features contributed to
-    the prediction. Do not interpret model explanations as causal effects.
-    - Use CRM history to understand previous interactions, opportunities,
-    contact outcomes, and customer history.
-    - Use external context to understand what is happening at the company.
-    - Do not invent information that is not provided.
-    - Treat missing or None values as unknown.
-    - Missing information does not automatically require RESEARCH_FIRST.
-    - For former customers, consider REENGAGE when there are meaningful
-    current signals; otherwise choose RESEARCH_FIRST.
-    - For engaged prospects/accounts with strong evidence, prefer CONTACT_NOW.
-    - If the available evidence conflicts substantially or is too weak,
-    choose RESEARCH_FIRST.
+CONTACT_NOW
+- Enough evidence exists to justify immediate outreach.
 
-    The recommendation should be actionable for a sales representative.
+REENGAGE
+- The account is a former customer and available signals suggest
+  that re-engagement is appropriate.
 
-    Return ONLY valid JSON:
+RESEARCH_FIRST
+- The account is high priority, but there is not enough reliable
+  context to confidently recommend immediate outreach or re-engagement.
 
-    {
-        "action": "CONTACT_NOW | REENGAGE | RESEARCH_FIRST",
-        "reason": "Brief explanation grounded in the provided evidence."
-    }
-    """
+Important rules:
 
-        user_prompt = {
-            "account": {
-                "account_id": account["account_id"],
-                "account_type": account["account_type"],
-                "conversion_probability": float(
-                    account["conversion_probability"]
-                ),
+- Do not rely on the model score alone.
+- Do not invent information.
+- Treat missing information as unknown.
+- SHAP explanations describe model behavior, not causal effects.
+- Consider CRM and external context when relevant.
+- If evidence conflicts or is too weak, choose RESEARCH_FIRST.
+
+Return a tool request when additional information is required.
+
+Return a final decision when enough information is available.
+"""
+
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt,
             },
-            "model_explanation": explanation,
-            "crm_history": history,
-            "external_context": external_context,
+            {
+                "role": "user",
+                "content": {
+                    "account": {
+                        "account_id": account["account_id"],
+                        "account_type": account["account_type"],
+                        "conversion_probability": float(
+                            account["conversion_probability"]
+                        ),
+                    },
+                    "model_explanation": explanation,
+                },
+            },
+        ]
+
+        tools_used = []
+        context = {}
+
+       
+        # Agent loop
+    
+
+        for _ in range(3):
+            decision = self._mock_llm_decision(
+                account=account,
+                explanation=explanation,
+                context=context,
+            )
+
+            # Agent wants another tool.
+            if decision["type"] == "tool_call":
+
+                tool_name = decision["tool"]
+
+                if tool_name not in self.tools:
+                    return {
+                        "action": "RESEARCH_FIRST",
+                        "reason": "Agent requested an unavailable tool.",
+                        "tools_used": tools_used,
+                    }
+
+                result = self.tools[tool_name](account)
+
+                tools_used.append(tool_name)
+                context[tool_name] = result
+
+                # In a real implementation, the tool result would be
+                # appended to the LLM conversation here.
+                messages.append({
+                    "role": "tool",
+                    "name": tool_name,
+                    "content": result,
+                })
+
+                continue
+
+            # Agent has enough information and makes final decision.
+            if decision["type"] == "final":
+                return {
+                    "action": decision["action"],
+                    "reason": decision["reason"],
+                    "tools_used": tools_used,
+                }
+
+        # Safety fallback if the agent keeps requesting tools.
+        return {
+            "action": "RESEARCH_FIRST",
+            "reason": (
+                "The agent could not reach a confident decision "
+                "within the allowed tool-call limit."
+            ),
+            "tools_used": tools_used,
         }
 
-        # Mock LLM response for the take-home.
-        # Replace this with the actual LLM call later.
-        #
-        # Recommended production parameters:
-        # temperature=0.0 for deterministic decisions
-        # max_tokens=300 to keep the response concise
-        # response_format=json_object for structured output
-        mock_response = {
-            "action": "CONTACT_NOW",
+    def _mock_llm_decision(
+        self,
+        account: pd.Series,
+        explanation: list[dict],
+        context: dict,
+    ) -> dict:
+        """
+        Mock the LLM's tool-calling behavior.
+
+        This represents what a real LLM with native function calling
+        would decide. The actual tool implementations are real/mocked
+        independently.
+
+        Replace this method with an actual LLM call in production.
+        """
+
+        account_type = account["account_type"]
+
+        crm = context.get("crm_history")
+        external = context.get("external_context")
+
+       
+        # First decision: choose the most useful tool.
+        
+
+        if not crm and not external:
+
+            # Former customers need CRM history first because the
+            # previous relationship is important for deciding whether
+            # to re-engage.
+            if account_type == "Former Customer":
+                return {
+                    "type": "tool_call",
+                    "tool": "crm_history",
+                }
+
+            # For prospects/suspects, current company activity can
+            # provide useful evidence for outreach.
+            return {
+                "type": "tool_call",
+                "tool": "external_context",
+            }
+
+
+        # CRM information is available.
+
+
+        if crm and not external:
+
+            previous_customer = crm.get("previous_customer", False)
+            open_opportunities = crm.get("open_opportunities", 0)
+            last_contact_outcome = crm.get("last_contact_outcome")
+
+            # Former customer + CRM history is usually enough to
+            # determine whether re-engagement is appropriate.
+            if previous_customer:
+
+                if (
+                    last_contact_outcome == "No response"
+                    and open_opportunities == 0
+                ):
+                    return {
+                        "type": "tool_call",
+                        "tool": "external_context",
+                    }
+
+                return {
+                    "type": "final",
+                    "action": "REENGAGE",
+                    "reason": (
+                        "CRM history shows a previous customer relationship "
+                        "and provides sufficient evidence to consider "
+                        "re-engagement."
+                    ),
+                }
+
+            # Active opportunity or positive engagement is strong
+            # evidence for immediate contact.
+            if (
+                open_opportunities > 0
+                or last_contact_outcome == "Positive response"
+            ):
+                return {
+                    "type": "final",
+                    "action": "CONTACT_NOW",
+                    "reason": (
+                        "CRM history shows active or positive sales "
+                        "engagement, supporting immediate outreach."
+                    ),
+                }
+
+            # CRM did not provide enough evidence.
+            return {
+                "type": "tool_call",
+                "tool": "external_context",
+            }
+
+      
+        # External information is available.
+     
+
+        if external and not crm:
+
+            recent_news = external.get("recent_news", [])
+            open_roles = external.get("open_roles")
+
+            # Current company activity gives enough evidence to contact.
+            if recent_news or (
+                open_roles is not None and open_roles > 0
+            ):
+                return {
+                    "type": "final",
+                    "action": "CONTACT_NOW",
+                    "reason": (
+                        "External company context shows current business "
+                        "activity, providing a relevant reason for outreach."
+                    ),
+                }
+
+            # We don't know enough about the account's sales history.
+            return {
+                "type": "tool_call",
+                "tool": "crm_history",
+            }
+
+      
+        # Both tools are available.
+       
+
+        if crm and external:
+
+            previous_customer = crm.get("previous_customer", False)
+            last_contact_outcome = crm.get("last_contact_outcome")
+            open_opportunities = crm.get("open_opportunities", 0)
+
+            if previous_customer:
+                return {
+                    "type": "final",
+                    "action": "REENGAGE",
+                    "reason": (
+                        "CRM history confirms a previous customer relationship "
+                        "and external context provides additional current "
+                        "company signals for re-engagement."
+                    ),
+                }
+
+            if (
+                open_opportunities > 0
+                or last_contact_outcome == "Positive response"
+            ):
+                return {
+                    "type": "final",
+                    "action": "CONTACT_NOW",
+                    "reason": (
+                        "CRM history shows active or positive engagement, "
+                        "supported by current external company context."
+                    ),
+                }
+
+            return {
+                "type": "final",
+                "action": "CONTACT_NOW",
+                "reason": (
+                    "The account is high priority and both CRM and external "
+                    "context provide sufficient evidence for outreach."
+                ),
+            }
+
+        return {
+            "type": "final",
+            "action": "RESEARCH_FIRST",
             "reason": (
-                "The account has a high predicted conversion probability, "
-                "recent positive CRM engagement, and external signals that "
-                "indicate potential business activity."
+                "There is insufficient context to confidently recommend "
+                "an immediate sales action."
             ),
         }
 
-        return mock_response
 
-
-
- 
-
-    def create_salesforce_task(self,
+    def create_salesforce_task(
+        self,
         account_id: str,
         action: str,
         reason: str,
@@ -258,7 +478,7 @@ class AccountPrioritizationAgent:
             "task": action,
             "reason": reason,
         }
-    
+
     def run(self, accounts: pd.DataFrame) -> pd.DataFrame:
         """Run the complete prioritization flow."""
 

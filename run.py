@@ -27,20 +27,25 @@ print(f"High-priority accounts: {len(high_priority)}")
 
 # Run agent for high-priority accounts
 for _, account in high_priority.head(5).iterrows():
-
     explanation = agent.explain_score(account)
-    history = agent.get_history(account)
-    external_context = agent.get_external_context(account)
 
+    # The agent decides whether it needs CRM history,
+    # external context, both, or neither.
     decision = agent.decide_action(
-        account,
-        history,
-        explanation,
-        external_context,
+        account=account,
+        explanation=explanation,
     )
 
     print("\nAccount:", account["account_id"])
-    print("Score:", round(account["conversion_probability"], 4))
+    print(
+        "Score:",
+        round(account["conversion_probability"], 4)
+    )
+
+    print("Model explanation:", explanation)
+
+    print("Tools used:", decision["tools_used"])
+
     print("Decision:", decision)
 
     # Execute the recommended action in Salesforce
