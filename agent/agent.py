@@ -2,6 +2,8 @@ import pandas as pd
 import joblib
 import shap
 
+from .tools import get_account_history
+
 
 class AccountPrioritizationAgent:
 
@@ -109,6 +111,29 @@ class AccountPrioritizationAgent:
         )
 
         return result
+
+    def get_history(self, account: pd.Series) -> dict:
+        """Get CRM history for an account."""
+        return get_account_history(account["account_id"])
+
+    def get_high_priority_context(self, accounts: pd.DataFrame) -> list[dict]:
+        """Get explanations and CRM history only for high-priority accounts."""
+
+        results = self.run(accounts)
+
+        high_priority = results[results["priority"] == "HIGH"]
+
+        context = []
+
+        for _, account in high_priority.iterrows():
+            context.append({
+                "account_id": account["account_id"],
+                "score": account["conversion_probability"],
+                "explanation": self.explain_score(account),
+                "history": self.get_history(account),
+            })
+
+        return context
 
     def run(self, accounts: pd.DataFrame) -> pd.DataFrame:
         """Run the complete prioritization flow."""
