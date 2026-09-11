@@ -34,3 +34,12 @@ for _, account in high_priority.head(5).iterrows():
     print("\nAccount:", account["account_id"])
     print("Score:", round(account["conversion_probability"], 4))
     print("Decision:", decision)
+
+    # Execute the recommended action in Salesforce
+    task = agent.create_salesforce_task(
+        account_id=account["account_id"],
+        action=decision["action"],
+        reason=decision["reason"],
+    )
+
+    print("Salesforce task:", task)

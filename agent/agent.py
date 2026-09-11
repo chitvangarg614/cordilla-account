@@ -245,7 +245,19 @@ class AccountPrioritizationAgent:
 
  
 
+    def create_salesforce_task(self,
+        account_id: str,
+        action: str,
+        reason: str,
+    ) -> dict:
+        """Create a mock Salesforce task for the sales representative."""
 
+        return {
+            "status": "created",
+            "account_id": account_id,
+            "task": action,
+            "reason": reason,
+        }
     
     def run(self, accounts: pd.DataFrame) -> pd.DataFrame:
         """Run the complete prioritization flow."""
