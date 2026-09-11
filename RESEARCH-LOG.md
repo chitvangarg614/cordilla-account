@@ -75,3 +75,75 @@ accounts continue to have higher observed conversion rates.
 If ranking/lift deteriorates, investigate upstream data changes, population
 shift, vendor changes, or model decay before deciding whether to recalibrate,
 retrain, or roll back.
+
+
+
+Sure — here is the exact `.md` content:
+
+## Next Steps — Agent Observability
+
+### Hypothesis
+
+A model can be healthy while the agent workflow is failing. Operational failures such as tool errors, high latency, failed LLM responses, or unsuccessful Salesforce actions could prevent good model predictions from turning into useful sales actions.
+
+### What I plan to monitor
+
+For each agent/tool execution:
+
+- Tool name and account ID
+- Success or failure
+- Execution time
+- Error details
+
+At the workflow level:
+
+- Agent success/failure rate
+- Tool failure rate and p95 latency
+- End-to-end execution time
+- Salesforce action success rate
+- Invalid or failed LLM responses
+- Number of tool calls per account
+
+### Decision
+
+Keep **model monitoring** and **agent observability** as separate layers.
+
+Model monitoring answers **"Is the model still performing as expected?"**, while agent observability answers **"Is the system executing the workflow reliably?"**
+
+### Next
+
+Implement structured logs for these signals and surface the key metrics in a simple operational dashboard.
+
+Then add outcome monitoring to determine whether actions such as `CONTACT_NOW`, `REENGAGE`, and `RESEARCH_FIRST` lead to productive sales outcomes.
+
+
+
+## Final Synthesis
+
+### What I would stand behind
+
+- The fresh dataset contains 300 accounts.
+- Mean predicted conversion probability is 6.55%.
+- The top 20% contains 60 accounts.
+- Intent-score missingness is 38.67% in fresh data versus 40.2% in training.
+- Ranking is preferable to an absolute probability cutoff because no business threshold was provided.
+- The 20% prioritization level is a sales-capacity assumption, not a proven optimal threshold.
+- Model predictions should be treated as prioritization signals, not guarantees or causal estimates.
+- The agent adds context and converts the ranking into an actionable sales decision.
+- Operational monitoring and business-outcome monitoring are separate from model monitoring.
+- Actual 90-day conversion outcomes will be needed to validate whether the ranking continues to provide useful lift.
+
+### Key assumptions
+
+- Sales capacity supports a high-touch queue of approximately 20% of scored accounts.
+- CRM and external context are available when needed.
+- Salesforce actions can be represented by the mocked integration in the prototype.
+- Actual conversion outcomes will become available after the 90-day outcome window.
+
+### Main risks
+
+- Upstream feature quality or missingness changes.
+- Population changes over time.
+- Model ranking/lift deteriorates.
+- Agent tools fail or become slow.
+- Agent recommendations do not translate into productive sales activity.
