@@ -1,7 +1,7 @@
 import pandas as pd
 
 from agent.agent import AccountPrioritizationAgent
-
+from monitoring.monitor import check_prediction_distribution, fire_alert
 
 agent = AccountPrioritizationAgent("model/model.pkl")
 
@@ -9,6 +9,14 @@ accounts = pd.read_csv("data/accounts_to_score.csv")
 
 # Score and prioritize
 results = agent.run(accounts)
+
+monitoring = check_prediction_distribution(
+    results["conversion_probability"]
+)
+
+fire_alert(monitoring)
+
+print("\nPrediction monitoring:", monitoring)
 
 high_priority = results[
     results["priority"] == "HIGH"
